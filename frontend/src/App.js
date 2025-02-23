@@ -9,12 +9,14 @@ function App() {
   const [resultImage, setResultImage] = useState(null);
   const [progress, setProgress] = useState(0);
   const [history, setHistory] = useState([]);
-  const [coordinates, setCoordinates] = useState([]);
+  const [boundingBox, setBoundingBox] = useState(null); // { x0, y0, x1, y1 }
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [startPoint, setStartPoint] = useState(null);
   const imageRef = useRef(null);
 
-  // 🟢 WebSocket för progress
+  // 🟢 WebSocket for progress
   useEffect(() => {
-    const socket = new WebSocket("ws://localhost:8000/progress/");
+    const socket = new WebSocket("ws://localhost:8087/progress/");
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
       setProgress(data.progress);
@@ -28,59 +30,118 @@ function App() {
 
   const fetchHistory = async () => {
     try {
-      const response = await axios.get("http://127.0.0.1:8000/user-history/");
+      const response = await axios.get("http://127.0.0.1:8087/user-history/");
       setHistory(response.data);
     } catch (error) {
       console.error("Failed to fetch history", error);
     }
   };
 
-  // 🟢 Ladda upp bild
+  // 🟢 Handle image upload
   const handleImageUpload = (event) => {
     const file = event.target.files[0];
     if (!file) return;
     setImage(file);
     setImagePreview(URL.createObjectURL(file));
     setMaskPreview(null);
-    setCoordinates([]); // Rensa tidigare koordinater
+    setBoundingBox(null);
+    setStartPoint(null);
   };
 
-  // 🟢 Klicka på bild för att markera punkter
-  const handleImageClick = (event) => {
+  // 🟢 Mouse event handlers for drawing a square bounding box
+  const handleMouseDown = (event) => {
+    event.preventDefault();
     if (!imageRef.current) return;
     const rect = imageRef.current.getBoundingClientRect();
     const x = Math.round(event.clientX - rect.left);
     const y = Math.round(event.clientY - rect.top);
-    setCoordinates([...coordinates, `${x},${y}`]);
+    // Use the first coordinate as the top-left
+    setStartPoint({ x, y });
+    setBoundingBox(null);
+    setIsDrawing(true);
   };
 
-  // 🟢 Förhandsvisa masken innan generering
+  const handleMouseMove = (event) => {
+    if (!isDrawing || !startPoint || !imageRef.current) return;
+    const rect = imageRef.current.getBoundingClientRect();
+    const currentX = Math.round(event.clientX - rect.left);
+    const currentY = Math.round(event.clientY - rect.top);
+
+    // Calculate differences assuming user drags down and right.
+    const dx = currentX - startPoint.x;
+    const dy = currentY - startPoint.y;
+    // Side length is the maximum of the differences
+    const side = Math.max(dx, dy);
+    setBoundingBox({
+      x0: startPoint.x,
+      y0: startPoint.y,
+      x1: startPoint.x + side,
+      y1: startPoint.y + side,
+    });
+  };
+
+  const handleMouseUp = (event) => {
+    if (!isDrawing || !startPoint || !imageRef.current) return;
+    const rect = imageRef.current.getBoundingClientRect();
+    const currentX = Math.round(event.clientX - rect.left);
+    const currentY = Math.round(event.clientY - rect.top);
+
+    const dx = currentX - startPoint.x;
+    const dy = currentY - startPoint.y;
+    const side = Math.max(dx, dy);
+
+    setIsDrawing(false);
+    setBoundingBox({
+      x0: startPoint.x,
+      y0: startPoint.y,
+      x1: startPoint.x + side,
+      y1: startPoint.y + side,
+    });
+  };
+
+  // Finalize box if mouse leaves image area while drawing
+  const handleMouseLeave = (event) => {
+    if (isDrawing) {
+      handleMouseUp(event);
+    }
+  };
+
+  // 🟢 Preview mask using the bounding box
   const handlePreviewMask = async () => {
-    if (!image || coordinates.length === 0) return alert("Select an image and mark at least one point!");
+    if (!image || !boundingBox)
+      return alert("Select an image and draw a bounding box!");
 
     const formData = new FormData();
     formData.append("file", image);
-    formData.append("coordinates", coordinates.join(";"));
+    // Send bounding box coordinates as a comma-separated string "x0,y0,x1,y1"
+    formData.append(
+      "box_coordinates",
+      `${boundingBox.x0},${boundingBox.y0},${boundingBox.x1},${boundingBox.y1}`
+    );
 
     try {
-      const response = await axios.post("http://localhost:8000/preview-mask/", formData, { responseType: "blob" });
+      const response = await axios.post("http://localhost:8087/preview-mask/", formData, { responseType: "blob" });
       setMaskPreview(URL.createObjectURL(response.data));
     } catch (error) {
       alert("Error generating mask: " + (error.response?.data?.message || error.message));
     }
   };
 
-  // 🟢 Skicka bild + koordinater för AI-generering
+  // 🟢 Submit image for AI generation with the bounding box
   const handleSubmit = async () => {
-    if (!image || !prompt) return alert("Please upload an image and enter a prompt!");
+    if (!image || !prompt || !boundingBox)
+      return alert("Please upload an image, draw a bounding box, and enter a prompt!");
 
     const formData = new FormData();
     formData.append("file", image);
     formData.append("prompt", prompt);
-    formData.append("coordinates", coordinates.join(";"));
+    formData.append(
+      "box_coordinates",
+      `${boundingBox.x0},${boundingBox.y0},${boundingBox.x1},${boundingBox.y1}`
+    );
 
     try {
-      const response = await axios.post("http://localhost:8000/stylize-image/", formData, { responseType: "blob" });
+      const response = await axios.post("http://localhost:8087/stylize-image/", formData, { responseType: "blob" });
       setResultImage(URL.createObjectURL(response.data));
       fetchHistory();
     } catch (error) {
@@ -92,7 +153,11 @@ function App() {
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100 p-6">
       <h1 className="text-4xl font-bold text-gray-800 mb-6">🎨 AI Image Styler</h1>
 
-      <input type="file" className="border p-2 mb-4 rounded bg-white shadow-md" onChange={handleImageUpload} />
+      <input
+        type="file"
+        className="border p-2 mb-4 rounded bg-white shadow-md"
+        onChange={handleImageUpload}
+      />
       <input
         type="text"
         placeholder="Enter style prompt (e.g., Van Gogh)"
@@ -112,24 +177,44 @@ function App() {
 
       {progress > 0 && <p className="text-gray-600 mt-2">Generating: {progress}% complete</p>}
 
-      {/* 🟢 Visa bild och låt användaren klicka */}
       {imagePreview && (
         <div className="mt-6">
-          <h2 className="text-xl font-semibold mb-2">Click on the image to select areas</h2>
-          <div className="relative">
+          <h2 className="text-xl font-semibold mb-2">Draw a square bounding box on the image</h2>
+          <div className="relative inline-block">
             <img
               src={imagePreview}
               alt="Uploaded"
               ref={imageRef}
-              className="border cursor-pointer max-w-xs"
-              onClick={handleImageClick}
+              className="border cursor-crosshair max-w-xs"
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseLeave}
+              draggable={false} // disable default drag behavior
             />
-            <p className="mt-2 text-gray-500">Selected Points: {coordinates.join("; ")}</p>
+            {/* Display the drawn square */}
+            {boundingBox && (
+              <div
+                style={{
+                  position: "absolute",
+                  left: Math.min(boundingBox.x0, boundingBox.x1),
+                  top: Math.min(boundingBox.y0, boundingBox.y1),
+                  width: Math.abs(boundingBox.x1 - boundingBox.x0),
+                  height: Math.abs(boundingBox.y1 - boundingBox.y0),
+                  border: "2px solid red",
+                  pointerEvents: "none",
+                }}
+              ></div>
+            )}
+            {boundingBox && (
+              <p className="mt-2 text-gray-500">
+                Selected Box: {boundingBox.x0}, {boundingBox.y0} to {boundingBox.x1}, {boundingBox.y1}
+              </p>
+            )}
           </div>
         </div>
       )}
 
-      {/* 🟢 Visa maskförhandsvisning */}
       {maskPreview && (
         <div className="mt-6">
           <h2 className="text-xl font-semibold mb-2">Generated Mask Preview</h2>
@@ -137,7 +222,6 @@ function App() {
         </div>
       )}
 
-      {/* 🟢 Visa genererad bild */}
       {resultImage && (
         <div className="mt-6">
           <h2 className="text-xl font-semibold mb-2">Result:</h2>
@@ -145,7 +229,6 @@ function App() {
         </div>
       )}
 
-      {/* 🟢 Visa historik */}
       {history.length > 0 && (
         <div className="mt-8">
           <h2 className="text-xl font-semibold mb-4">Previously Generated Images</h2>
