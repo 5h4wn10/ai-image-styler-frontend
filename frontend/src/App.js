@@ -13,6 +13,8 @@ function App() {
   const [boundingBox, setBoundingBox] = useState(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [startPoint, setStartPoint] = useState(null);
+  const [strength, setStrength] = useState(0.4);
+  const [guidance, setGuidance] = useState(8);
   const imageRef = useRef(null);
 
   useEffect(() => {
@@ -63,7 +65,6 @@ function App() {
     const rect = imageRef.current.getBoundingClientRect();
     const currentX = Math.round(event.clientX - rect.left);
     const currentY = Math.round(event.clientY - rect.top);
-
     const dx = currentX - startPoint.x;
     const dy = currentY - startPoint.y;
     const side = Math.max(dx, dy);
@@ -139,15 +140,38 @@ function App() {
     }
   };
 
+  const handleRobel = async () => {
+    if (!image || !prompt) {
+      return alert("Please upload an image and enter a prompt!");
+    }
+  
+    const formData = new FormData();
+    formData.append("file", image);
+    formData.append("prompt", prompt);
+    formData.append("strength", strength);
+    formData.append("guidance", guidance);
+  
+    try {
+      const response = await axios.post(
+        "http://localhost:8087/stylize-imageStable/",
+        formData,
+        { responseType: "blob" } // Ensures image is returned as a file
+      );
+  
+      setResultImage(URL.createObjectURL(response.data));
+    } catch (error) {
+      alert(
+        "Error generating image: " + (error.response?.data?.message || error.message)
+      );
+    }
+  };
+  
+
   return (
     <div className="App">
       <h1>🎨 AI Image Styler</h1>
 
-      <input
-        type="file"
-        className="file-input"
-        onChange={handleImageUpload}
-      />
+      <input type="file" className="file-input" onChange={handleImageUpload} />
       <input
         type="text"
         placeholder="Enter style prompt (e.g., Van Gogh)"
@@ -156,12 +180,43 @@ function App() {
         onChange={(e) => setPrompt(e.target.value)}
       />
 
+      {/* 🟢 Strength & Guidance input fields */}
+      <div className="strength-guidance-container">
+        <div>
+          <label className="input-label">Strength</label>
+          <input
+            type="number"
+            min="0"
+            max="1"
+            step="0.1"
+            className="text-input"
+            value={strength}
+            onChange={(e) => setStrength(parseFloat(e.target.value))}
+          />
+        </div>
+        <div>
+          <label className="input-label">Guidance</label>
+          <input
+            type="number"
+            min="1"
+            max="20"
+            step="0.5"
+            className="text-input"
+            value={guidance}
+            onChange={(e) => setGuidance(parseFloat(e.target.value))}
+          />
+        </div>
+      </div>
+
       <div className="button-container">
-        <button className="button-primary" onClick={handlePreviewMask}>
+        <button className="button1" onClick={handlePreviewMask}>
           Preview Mask
         </button>
-        <button className="button-secondary" onClick={handleSubmit}>
+        <button className="button2" onClick={handleSubmit}>
           Generate Image
+        </button>
+        <button className="button3" onClick={handleRobel}>
+          Generate Full Image
         </button>
       </div>
 
@@ -197,28 +252,8 @@ function App() {
         </div>
       )}
 
-      {maskPreview && (
-        <div className="image-container">
-          <h2>Generated Mask Preview</h2>
-          <img src={maskPreview} alt="Mask Preview" className="image-preview" />
-        </div>
-      )}
-
-      {resultImage && (
-        <div className="image-container">
-          <h2>Result</h2>
-          <img src={resultImage} alt="AI Generated" className="image-preview" />
-        </div>
-      )}
-
-      {history.length > 0 && (
-        <div className="grid">
-          <h2>Previously Generated Images</h2>
-          {history.map((img, idx) => (
-            <img key={idx} src={img.image_url} alt="AI Image" />
-          ))}
-        </div>
-      )}
+      {maskPreview && <img src={maskPreview} alt="Mask Preview" className="image-preview" />}
+      {resultImage && <img src={resultImage} alt="AI Generated" className="image-preview" />}
     </div>
   );
 }
